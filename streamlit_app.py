@@ -2,47 +2,92 @@ import streamlit as st
 import google.generativeai as genai
 from pypdf import PdfReader
 
-st.set_page_config(page_title="DocuMind - Universal", page_icon="🤖")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="DocuMind AI", page_icon="⚡", layout="centered")
 
-st.title("🤖 DocuMind: Selector Automático")
+# --- CONFIGURACIÓN OCULTA (HARDCODED) ---
+MODELO_USADO = "models/gemini-1.5-flash"  # El modelo rápido y gratis
 
-# 1. Tu API Key
-api_key = st.text_input("Pega tu API Key:", type="password")
+# --- 1. AUTENTICACIÓN INVISIBLE ---
+try:
+    # Busca la llave en los secretos de Streamlit
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=api_key)
+except FileNotFoundError:
+    st.error("⚠️ Error de Configuración: No se encontró la API Key en los secretos.")
+    st.stop()
 
-if api_key:
-    # 2. Configurar y Buscar Modelos Disponibles
-    try:
-        genai.configure(api_key=api_key)
-        # Pedimos la lista real a Google
-        all_models = genai.list_models()
-        
-        # Filtramos solo los que sirven para chatear (generateContent)
-        my_models = [m.name for m in all_models if 'generateContent' in m.supported_generation_methods]
-        
-        if not my_models:
-            st.error("Tu API Key es válida, pero Google dice que no tienes acceso a ningún modelo. ¿Es una Key nueva?")
-        else:
-            # 3. ¡Aquí está la magia! Un selector con lo que SÍ funciona
-            selected_model = st.selectbox("Elige un modelo disponible:", my_models)
-            st.success(f"Conectado a: {selected_model}")
+# --- INTERFAZ DE USUARIO ---
+st.title("⚡ DocuMind: Análisis Instantáneo")
+st.markdown(f"""
+    <style>
+    .info-box {{ padding: 10px; background-color: #f0f2f6; border-radius: 8px; font-size: 0.8em; color: #555; }}
+    </style>
+    <div class="info-box">
+        POTENCIADO POR: <strong>Google {MODELO_USADO.replace('models/', '').upper()}</strong><br>
+        Esta tecnología analiza tu documento en segundos sin almacenar datos personales.
+    </div>
+    """, unsafe_allow_html=True)
+
+st.divider()
+
+# --- 2. CARGA DE PDF ---
+pdf_file = st.file_uploader("Sube tu documento (PDF)", type=['pdf'])
+
+if pdf_file:
+    # Procesamiento automático al subir
+    with st.spinner("⏳ Leyendo documento a velocidad luz..."):
+        try:
+            reader = PdfReader(pdf_file)
+            text = ""
+            for page in reader.pages:
+                text += page.extract_text() or ""
             
-            # --- Lógica de PDF y Chat ---
-            pdf_file = st.file_uploader("Sube tu PDF", type=['pdf'])
+            # Guardamos el texto en memoria
+            st.session_state['text'] = text
+            st.success(f"✅ Documento procesado ({len(text)} caracteres leídos).")
             
-            if pdf_file and st.button("Procesar PDF"):
-                reader = PdfReader(pdf_file)
-                text = ""
-                for page in reader.pages:
-                    text += page.extract_text() or ""
-                st.session_state['text'] = text
-                st.info("PDF Leído. Pregunta abajo.")
+        except Exception as e:
+            st.error(f"Error leyendo el PDF: {e}")
 
-            if 'text' in st.session_state:
-                question = st.text_input("Pregunta:")
-                if question:
-                    model = genai.GenerativeModel(selected_model)
-                    response = model.generate_content(f"Contexto: {st.session_state['text']} \n\n Pregunta: {question}")
-                    st.write(response.text)
+# --- 3. CHAT ---
+if 'text' in st.session_state:
+    # Historial de chat
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
 
-    except Exception as e:
-        st.error(f"Error de conexión: {e}")
+    # Mostrar mensajes previos
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+    # Input del usuario
+    if prompt := st.chat_input("Pregunta algo sobre el documento..."):
+        # Guardar y mostrar pregunta
+        st.session_state.messages.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+
+        # Generar respuesta
+        with st.chat_message("assistant"):
+            try:
+                model = genai.GenerativeModel(MODELO_USADO)
+                # Prompt de ingeniería para que se comporte bien
+                full_prompt = f"""
+                Actúa como un analista experto. Usa el siguiente contexto para responder la pregunta.
+                Si la respuesta no está en el texto, dilo. Sé conciso y profesional.
+                
+                CONTEXTO:
+                {st.session_state['text']}
+                
+                PREGUNTA:
+                {prompt}
+                """
+                response = model.generate_content(full_prompt)
+                st.markdown(response.text)
+                
+                # Guardar respuesta
+                st.session_state.messages.append({"role": "assistant", "content": response.text})
+                
+            except Exception as e:
+                st.error(f"Error de conexión: {e}")
