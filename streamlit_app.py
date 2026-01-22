@@ -1,91 +1,88 @@
 import streamlit as st
 import google.generativeai as genai
 from pypdf import PdfReader
+import time
 
-# --- CONFIGURACIÓN DE PÁGINA ---
-st.set_page_config(page_title="DocuMind AI Pro", page_icon="📚", layout="centered")
+# --- CONFIGURACIÓN ---
+st.set_page_config(page_title="DocuMind AI", page_icon="⚡", layout="centered")
 
-# --- CONFIGURACIÓN OCULTA ---
-MODELO_USADO = "models/gemini-1.5-flash"
-
-# --- 1. AUTENTICACIÓN INVISIBLE ---
+# --- AUTENTICACIÓN ---
 try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
+    if "GOOGLE_API_KEY" in st.secrets:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+    else:
+        # Fallback por si no han configurado secretos
+        api_key = st.text_input("🔑 API Key requerida:", type="password")
+        if not api_key: st.stop()
+    
     genai.configure(api_key=api_key)
-except FileNotFoundError:
-    st.error("⚠️ Error: No se encontró la API Key en los secretos.")
+except Exception as e:
+    st.error(f"Error de Configuración: {e}")
     st.stop()
 
+# --- FUNCIÓN INTELIGENTE DE SELECCIÓN DE MODELO ---
+def get_working_model():
+    """Busca qué modelo está disponible para esta API Key"""
+    lista_preferencia = [
+        "gemini-1.5-flash", 
+        "gemini-1.5-flash-latest", 
+        "gemini-1.5-pro",
+        "gemini-pro"
+    ]
+    
+    try:
+        # Preguntamos a Google qué modelos ve la llave
+        available_models = [m.name.replace("models/", "") for m in genai.list_models()]
+        
+        # Buscamos el mejor disponible
+        for modelo in lista_preferencia:
+            if modelo in available_models:
+                return modelo
+        
+        # Si no encuentra coincidencia exacta, devuelve el primero que genere texto
+        return available_models[0]
+        
+    except Exception:
+        # Si falla el listado, forzamos el flash estándar
+        return "gemini-1.5-flash"
+
 # --- INTERFAZ ---
-st.title("📚 DocuMind: Análisis Multi-Documento")
-st.markdown(f"""
-    <div style="padding: 10px; background-color: #f0f2f6; border-radius: 8px; font-size: 0.8em; color: #555;">
-        POTENCIADO POR: <strong>Google {MODELO_USADO.replace('models/', '').upper()}</strong><br>
-        Sube varios archivos y haz preguntas cruzadas (Ej: "Compara el documento 1 con el 2").
-    </div>
-    """, unsafe_allow_html=True)
+st.title("⚡ DocuMind")
+
+# Selección automática (Invisible para el usuario, pero robusta)
+if "modelo_actual" not in st.session_state:
+    with st.spinner("Conectando con el cerebro de Google..."):
+        st.session_state["modelo_actual"] = get_working_model()
+
+modelo_usado = st.session_state["modelo_actual"]
+st.caption(f"🟢 Conectado exitosamente a: **{modelo_usado}**")
 
 st.divider()
 
-# --- 2. CARGA DE PDFS (Ahora Múltiples) ---
-# accept_multiple_files=True es la clave aquí
-pdf_files = st.file_uploader("Sube tus documentos (PDF)", type=['pdf'], accept_multiple_files=True)
+# --- LÓGICA DE PDF Y CHAT ---
+pdf_files = st.file_uploader("Sube tus documentos", type=['pdf'], accept_multiple_files=True)
 
 if pdf_files:
-    # Botón manual para procesar (mejor cuando son varios archivos)
-    if st.button(f"🧠 Procesar {len(pdf_files)} Documentos"):
-        with st.spinner("Fusionando conocimientos..."):
-            try:
-                full_text = ""
-                # Bucle: Leemos cada PDF uno por uno
-                for pdf in pdf_files:
-                    reader = PdfReader(pdf)
-                    # Añadimos un encabezado para que la IA sepa dónde empieza cada uno
-                    full_text += f"\n\n--- INICIO DEL DOCUMENTO: {pdf.name} ---\n"
-                    for page in reader.pages:
-                        full_text += page.extract_text() or ""
-                    full_text += f"\n--- FIN DEL DOCUMENTO: {pdf.name} ---\n"
-                
-                # Guardamos TODO el texto junto en la memoria
-                st.session_state['text'] = full_text
-                st.success(f"✅ Éxito: Se leyeron {len(pdf_files)} archivos correctamente.")
-                
-            except Exception as e:
-                st.error(f"Error leyendo los PDFs: {e}")
+    if st.button(f"Procesar {len(pdf_files)} Archivos"):
+        with st.spinner("Leyendo..."):
+            text = ""
+            for pdf in pdf_files:
+                reader = PdfReader(pdf)
+                for page in reader.pages:
+                    text += page.extract_text() or ""
+            st.session_state['text'] = text
+            st.success("¡Listo! Pregunta abajo.")
 
-# --- 3. CHAT ---
 if 'text' in st.session_state:
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
-
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    if prompt := st.chat_input("Pregunta sobre los documentos..."):
-        st.session_state.messages.append({"role": "user", "content": prompt})
+    prompt = st.chat_input("Escribe tu pregunta...")
+    if prompt:
         with st.chat_message("user"):
-            st.markdown(prompt)
-
+            st.write(prompt)
+            
         with st.chat_message("assistant"):
             try:
-                model = genai.GenerativeModel(MODELO_USADO)
-                # Prompt actualizado para manejar múltiples fuentes
-                full_prompt = f"""
-                Actúa como un analista experto. Tienes acceso a uno o varios documentos.
-                Usa el siguiente contexto para responder.
-                
-                IMPORTANTE: Si la información viene de un documento específico, menciona su nombre (ej: "Según el reporte A...").
-                
-                CONTEXTO COMBINADO:
-                {st.session_state['text']}
-                
-                PREGUNTA:
-                {prompt}
-                """
-                response = model.generate_content(full_prompt)
-                st.markdown(response.text)
-                st.session_state.messages.append({"role": "assistant", "content": response.text})
-                
+                model = genai.GenerativeModel(modelo_usado)
+                res = model.generate_content(f"Contexto: {st.session_state['text']}\n\nPregunta: {prompt}")
+                st.write(res.text)
             except Exception as e:
-                st.error(f"Error de conexión: {e}")
+                st.error(f"Error: {e}")
