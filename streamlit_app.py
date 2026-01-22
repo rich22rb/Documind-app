@@ -10,7 +10,7 @@ MODELO_USADO = "models/gemini-1.5-flash"
 
 # --- 1. AUTENTICACIÓN INVISIBLE ---
 try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
+    api_key = st.secrets["AIzaSyC_buisb4SIDzFJCPzR7gunsSjdTiNa8pY"]
     genai.configure(api_key=api_key)
 except FileNotFoundError:
     st.error("⚠️ Error: No se encontró la API Key en los secretos.")
